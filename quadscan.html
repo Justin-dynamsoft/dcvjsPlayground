@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="color-scheme" content="dark">
+	<title>Quadscan · 实时文档检测</title>
+	<style>
+		:root { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; color: #e9edf6; background: #0b101a; }
+		* { box-sizing: border-box; }
+		body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 50% 0, #182940 0, transparent 65%); }
+		main { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 28px; }
+		header { margin-bottom: 28px; }
+		.eyebrow { color: #64dfb5; font-size: 12px; font-weight: 700; letter-spacing: .18em; }
+		h1 { margin: 12px 0; font-size: clamp(26px, 5vw, 40px); letter-spacing: -.04em; }
+		.description, .tip, footer { color: #96a5bb; font-size: 14px; line-height: 1.8; }
+		.description { margin: 0; }
+		.card { overflow: hidden; border: 1px solid #29364a; border-radius: 20px; background: #111a28; box-shadow: 0 20px 70px #0004; }
+		.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; }
+		.status { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+		.dot { width: 8px; height: 8px; border-radius: 50%; background: #718198; }
+		.status[data-state="loading"] .dot { background: #f5c769; }
+		.status[data-state="running"] .dot { background: #64dfb5; box-shadow: 0 0 12px #64dfb560; }
+		.status[data-state="error"] .dot { background: #ff8e97; }
+		.actions { display: flex; gap: 10px; }
+		button { border: 1px solid #35445c; border-radius: 9px; padding: 10px 18px; color: #e9edf6; background: #1d293c; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+		button.primary { color: #08251d; background: #64dfb5; border-color: #64dfb5; }
+		button:hover:not(:disabled) { filter: brightness(1.12); }
+		button:disabled { opacity: .4; cursor: not-allowed; }
+		button:focus-visible, a:focus-visible { outline: 2px solid #64dfb5; outline-offset: 4px; }
+		.preview { position: relative; aspect-ratio: 16 / 9; background: #060b12; overflow: hidden; }
+		video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+		video { object-fit: contain; }
+		canvas { pointer-events: none; }
+		[hidden] { display: none !important; }
+		.placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #899bb4; padding: 24px; text-align: center; }
+		.placeholder svg { width: 58px; height: 58px; color: #526782; }
+		.badge { position: absolute; bottom: 18px; left: 18px; padding: 7px 12px; background: #08111bd9; border: 1px solid #ffffff20; border-radius: 7px; color: #b7c8de; font-size: 12px; }
+		.metrics { display: grid; grid-template-columns: repeat(3, 1fr); padding: 24px 0; }
+		.metric { text-align: center; border-right: 1px solid #29364a; }
+		.metric:last-child { border: none; }
+		.metric dt { color: #96a5bb; font-size: 12px; margin-bottom: 8px; }
+		.metric dd { margin: 0; font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; }
+		.metric small { font-size: 12px; color: #96a5bb; font-weight: 400; }
+		.message { margin: 0; padding: 14px 22px; border-top: 1px solid #29364a; color: #96a5bb; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+		.message.error { color: #ffadb4; background: #ff67700a; }
+		.tip { margin: 20px 4px; }
+		footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 20px; font-size: 12px; border-top: 1px solid #263348; padding-top: 18px; }
+		a { color: #a9bdcf; text-decoration: none; }
+		a:hover { color: #64dfb5; }
+		@media (max-width: 520px) {
+			main { padding-top: 28px; }
+			.toolbar { padding: 14px; flex-wrap: wrap; }
+			.preview { aspect-ratio: 4 / 3; }
+			.metric dd { font-size: 23px; }
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<header>
+			<div class="eyebrow">QUADSCAN / WEBCAM</div>
+			<h1>实时文档四角检测</h1>
+			<p class="description">打开摄像头，让文档完整进入画面。每 500 ms 检测一次，实时勾勒文档边界。</p>
+		</header>
+
+		<section class="card" aria-label="文档检测器">
+			<div class="toolbar">
+				<div class="status" id="status" data-state="idle" role="status">
+					<span class="dot" aria-hidden="true"></span><span id="statusText">摄像头未启动</span>
+				</div>
+				<div class="actions">
+					<button class="primary" id="startButton" type="button">启动摄像头</button>
+					<button id="stopButton" type="button" disabled>停止</button>
+				</div>
+			</div>
+
+			<div class="preview" id="preview">
+				<video id="video" autoplay muted playsinline aria-label="摄像头画面"></video>
+				<canvas id="overlay" aria-label="检测到的文档轮廓"></canvas>
+				<div class="placeholder" id="placeholder">
+					<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+						<rect x="5" y="12" width="28" height="25" rx="5"/>
+						<path d="m33 20 10-6v21l-10-6M17 7h12M15 22h8m-8 6h12"/>
+					</svg>
+					<span id="placeholderText">点击「启动摄像头」开始检测</span>
+				</div>
+				<span class="badge" id="detectionBadge" hidden>正在寻找文档…</span>
+			</div>
+
+			<dl class="metrics">
+				<div class="metric"><dt>检测 FPS</dt><dd id="fps">—</dd></div>
+				<div class="metric"><dt>置信度</dt><dd id="confidence">—</dd></div>
+				<div class="metric"><dt>推理耗时</dt><dd><span id="inference">—</span> <small>ms</small></dd></div>
+			</dl>
+			<p class="message" id="message" role="status">首次启动需要下载模型和运行时，请保持网络连接。</p>
+		</section>
+
+		<p class="tip">提示：保持光线充足，让文档与背景有明显对比。模型在浏览器本地运行，摄像头画面不会上传。请通过 HTTPS 或 localhost 打开此页面。</p>
+		<footer>
+			<span>Quadscan 1.0.0 · DocAligner / LCNet</span>
+			<span><a href="https://storrealbac.github.io/quadscan/examples/webcam/" target="_blank" rel="noopener noreferrer">参考 Demo ↗</a> · <a href="https://github.com/storrealbac/quadscan" target="_blank" rel="noopener noreferrer">Quadscan · MIT</a> · <a href="https://github.com/DocsaidLab/DocAligner" target="_blank" rel="noopener noreferrer">DocAligner · Apache 2.0</a></span>
+		</footer>
+	</main>
+
+	<script>
+		'use strict';
+
+		const $ = (id) => document.getElementById(id);
+		const video = $('video');
+		const overlay = $('overlay');
+		const context = overlay.getContext('2d');
+		const interval = 500;
+		let activeRun = null;
+		let sdkPromise = null;
+
+		function setStatus(state, text) {
+			$('status').dataset.state = state;
+			$('statusText').textContent = text;
+		}
+
+		function setMessage(text, isError = false) {
+			$('message').textContent = text;
+			$('message').classList.toggle('error', isError);
+		}
+
+		// The IIFE exports a namespace: the constructor is window.Quadscan.Quadscan.
+		// Load on demand so the page remains usable if the CDN is unavailable.
+		function loadSDK() {
+			if (sdkPromise) return sdkPromise;
+			sdkPromise = new Promise((resolve, reject) => {
+				const script = document.createElement('script');
+				script.src = 'https://cdn.jsdelivr.net/npm/quadscan@1.0.0/dist/quadscan.iife.js';
+				script.onload = () => {
+					if (typeof window.Quadscan?.Quadscan === 'function') resolve(window.Quadscan.Quadscan);
+					else reject(new Error('SDK 加载完成，但未找到 Quadscan 构造函数。'));
+				};
+				script.onerror = () => {
+					script.remove();
+					reject(new Error('无法加载 Quadscan SDK，请检查网络是否能访问 cdn.jsdelivr.net。'));
+				};
+				document.head.appendChild(script);
+			}).catch((error) => {
+				sdkPromise = null;
+				throw error;
+			});
+			return sdkPromise;
+		}
+
+		function resetMetrics() {
+			for (const id of ['fps', 'confidence', 'inference']) $(id).textContent = '—';
+		}
+
+		function drawCorners(corners) {
+			const points = [corners.topLeft, corners.topRight, corners.bottomRight, corners.bottomLeft];
+			context.beginPath();
+			points.forEach((point, index) => {
+				if (index === 0) context.moveTo(point.x, point.y);
+				else context.lineTo(point.x, point.y);
+			});
+			context.closePath();
+			context.fillStyle = '#64dfb51f';
+			context.strokeStyle = '#64dfb5';
+			context.lineWidth = Math.max(3, overlay.width / 320);
+			context.lineJoin = 'round';
+			context.fill();
+			context.stroke();
+			for (const point of points) {
+				context.beginPath();
+				context.arc(point.x, point.y, Math.max(5, overlay.width / 180), 0, 2 * Math.PI);
+				context.fillStyle = '#d5fff0';
+				context.fill();
+			}
+		}
+
+		function describeError(error) {
+			const messages = {
+				NotAllowedError: '摄像头权限被拒绝，请在浏览器地址栏允许摄像头访问后重试。',
+				NotFoundError: '未找到可用摄像头，请连接摄像头后重试。',
+				NotReadableError: '无法读取摄像头，可能正被其他程序占用。',
+				OverconstrainedError: '摄像头不支持请求的设置，请尝试其他设备。',
+				SecurityError: '浏览器阻止了摄像头访问，请使用 HTTPS 或 localhost。'
+			};
+			return messages[error.name] || error.message || '启动失败，请重试。';
+		}
+
+		// A run owns its stream, timer and model. Never dispose a model mid-inference.
+		function disposeScanner(run) {
+			if (!run.scanner) return;
+			try { run.scanner.dispose(); }
+			catch (error) { console.warn('Quadscan cleanup:', error); }
+			run.scanner = null;
+		}
+
+		function stopCamera() {
+			const run = activeRun;
+			activeRun = null;
+			if (run) {
+				clearTimeout(run.timer);
+				run.stream?.getTracks().forEach((track) => track.stop());
+				if (!run.busy) disposeScanner(run);
+			}
+			video.pause();
+			video.srcObject = null;
+			context.clearRect(0, 0, overlay.width, overlay.height);
+			$('placeholder').hidden = false;
+			$('placeholderText').textContent = '点击「启动摄像头」开始检测';
+			$('detectionBadge').hidden = true;
+			$('startButton').disabled = false;
+			$('stopButton').disabled = true;
+			resetMetrics();
+			setStatus('idle', '摄像头未启动');
+			setMessage('摄像头已停止，视频轨道和模型资源已释放。');
+		}
+
+		function failRun(run, error) {
+			if (activeRun !== run) return;
+			console.error(error);
+			stopCamera();
+			setStatus('error', '发生错误');
+			setMessage(describeError(error), true);
+		}
+
+		async function detectFrame(run) {
+			if (activeRun !== run) return;
+			const started = performance.now();
+			run.busy = true;
+			try {
+				// Keep both layers in source-image coordinates, including on mobile rotation.
+				if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+					run.previousFrame = 0;
+					return;
+				}
+				if (overlay.width !== video.videoWidth || overlay.height !== video.videoHeight) {
+					overlay.width = video.videoWidth;
+					overlay.height = video.videoHeight;
+					$('preview').style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+				}
+				const result = await run.scanner.scan(video, { mode: 'detect' });
+				if (activeRun !== run) return;
+				const now = performance.now();
+				const inference = result.timings?.find((timing) => timing.step === 'inference');
+				$('inference').textContent = inference ? inference.ms.toFixed(1) : '—';
+				$('fps').textContent = run.previousFrame ? (1000 / (now - run.previousFrame)).toFixed(1) : '—';
+				run.previousFrame = now;
+				$('confidence').textContent = Number.isFinite(result.confidence)
+					? `${(result.confidence * 100).toFixed(1)}%` : '—';
+				context.clearRect(0, 0, overlay.width, overlay.height);
+				if (result.success && result.corners) {
+					drawCorners(result.corners);
+					$('detectionBadge').textContent = '已检测到文档';
+					setMessage('检测中 · 绿色轮廓标记文档四角，所有处理均在本地完成。');
+				} else {
+					$('detectionBadge').textContent = '正在寻找文档…';
+					setMessage('未检测到文档，请让四角完整进入画面，并保持光线充足。');
+				}
+			} catch (error) {
+				failRun(run, error);
+			} finally {
+				run.busy = false;
+				if (activeRun === run) {
+					// Recursive timeout prevents overlapping inference on slower devices.
+					run.timer = setTimeout(() => detectFrame(run), Math.max(0, interval - (performance.now() - started)));
+				} else {
+					disposeScanner(run);
+				}
+			}
+		}
+
+		async function startCamera() {
+			if (activeRun) return;
+			if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+				setStatus('error', '摄像头不可用');
+				setMessage('当前环境无法访问摄像头。请通过 HTTPS 或 http://localhost 打开，并使用支持摄像头的浏览器。', true);
+				return;
+			}
+			const run = { stream: null, scanner: null, timer: null, busy: false, previousFrame: 0 };
+			activeRun = run;
+			$('startButton').disabled = true;
+			$('stopButton').disabled = false;
+			resetMetrics();
+			setStatus('loading', '正在启动…');
+			setMessage('请允许浏览器使用摄像头。');
+			try {
+				run.stream = await navigator.mediaDevices.getUserMedia({
+					audio: false,
+					video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+				});
+				if (activeRun !== run) {
+					run.stream.getTracks().forEach((track) => track.stop());
+					return;
+				}
+				for (const track of run.stream.getVideoTracks()) {
+					track.addEventListener('ended', () => {
+						if (activeRun === run) failRun(run, new Error('摄像头连接已中断，请重新启动。'));
+					}, { once: true });
+				}
+				video.srcObject = run.stream;
+				await video.play();
+				if (activeRun !== run) return;
+				$('placeholder').hidden = true;
+				$('detectionBadge').hidden = false;
+				$('detectionBadge').textContent = '正在加载模型…';
+				setStatus('loading', '正在加载模型…');
+				setMessage('正在下载并初始化 Quadscan / LCNet 模型，首次启动可能需要一些时间。');
+				const Scanner = await loadSDK();
+				if (activeRun !== run) return;
+				// WASM is broadly supported and does not require WebGPU.
+				run.scanner = new Scanner({ executionProviders: ['wasm'] });
+				run.busy = true;
+				try { await run.scanner.initialize(); }
+				finally {
+					run.busy = false;
+					if (activeRun !== run) disposeScanner(run);
+				}
+				if (activeRun !== run) return;
+				setStatus('running', '摄像头运行中');
+				await detectFrame(run);
+			} catch (error) {
+				failRun(run, error);
+			}
+		}
+
+		$('startButton').addEventListener('click', startCamera);
+		$('stopButton').addEventListener('click', stopCamera);
+		window.addEventListener('pagehide', stopCamera);
+	</script>
+</body>
+</html>
